@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>kitti_player</name>
+  <version>0.0.1</version>
+  <description>Publish KITTI odometry velodyne scans as /velodyne_points at 10Hz</description>
+  <maintainer email="trq@example.com">trq</maintainer>
+  <license>BSD</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <depend>roscpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>pcl_conversions</depend>
+  <depend>pcl_ros</depend>
+</package>

@@ -1,0 +1,22 @@
+{
+  "configurations": [
+    {
+      "name": "Linux",
+      "compileCommands": "${workspaceFolder}/catkin_ws/build/compile_commands.json",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "/opt/ros/noetic/include/**",
+        "/usr/include/pcl-1.10",
+        "/usr/include/eigen3",
+        "/usr/include/opencv4",
+        "${workspaceFolder}/catkin_ws/devel/include"
+      ],
+      "defines": [],
+      "compilerPath": "/usr/bin/g++",
+      "cStandard": "c11",
+      "cppStandard": "c++14",
+      "intelliSenseMode": "linux-gcc-x64"
+    }
+  ],
+  "version": 4
+}

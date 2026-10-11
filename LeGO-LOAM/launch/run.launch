@@ -6,10 +6,13 @@
     <!--- Run Rviz-->
     <node pkg="rviz" type="rviz" name="rviz" args="-d $(find lego_loam)/launch/test.rviz" />
 
-    <!--- TF -->
-    <node pkg="tf" type="static_transform_publisher" name="camera_init_to_map"  args="0 0 0 1.570795   0        1.570795 /map    /camera_init 10" />
-    <node pkg="tf" type="static_transform_publisher" name="base_link_to_camera" args="0 0 0 -1.570795 -1.570795 0        /camera /base_link   10" />
-    <node pkg="tf" type="static_transform_publisher" name="base_link_to_velodyne" args="0 0 0 0 0 0 /base_link /velodyne 10" />
+    <!--- TF (tf2_ros 静态发布器: 发布到 /tf_static 锁存, rviz 的 tf2 才能稳定获取; 老版 tf 包发 /tf 动态话题会导致间歇性 Failed to transform) -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="camera_init_to_map"  args="0 0 0 1.570795   0        1.570795 map    camera_init" />
+    <node pkg="tf2_ros" type="static_transform_publisher" name="base_link_to_camera" args="0 0 0 -1.570795 -1.570795 0        camera base_link" />
+    <node pkg="tf2_ros" type="static_transform_publisher" name="base_link_to_velodyne" args="0 0 0 1.570795 -1.570795 0 base_link velodyne" />
+    <!-- 仿真修正: 原版 TF 树中 /camera 无父级, 雷达帧无法跟随车辆。挂到建图输出的动态位姿 /aft_mapped 下;
+         base_link->velodyne 由恒等改为 RPY(90°,-90°,0), 把雷达数据约定(x朝前)对齐到车辆相机约定(z朝前) -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="aft_mapped_to_camera" args="0 0 0 0 0 0 aft_mapped camera" />
 
     <!--- LeGO-LOAM -->    
     <node pkg="lego_loam" type="imageProjection"    name="imageProjection"    output="screen"/>

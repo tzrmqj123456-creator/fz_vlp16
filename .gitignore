@@ -1,3 +1,12 @@
 catkin_ws/build/
 catkin_ws/devel/
 catkin_ws/logs/
+catkin_ws/.catkin_workspace
+catkin_ws/src/CMakeLists.txt
+
+# 数据集与生成产物(体积大或可再生)
+05/
+dataset/
+results/
+__pycache__/
+*.pyc

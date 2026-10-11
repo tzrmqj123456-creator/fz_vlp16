@@ -54,18 +54,26 @@ extern const string pointCloudTopic = "/velodyne_points";
 extern const string imuTopic = "/imu/data";
 
 // Save pcd
-extern const string fileDirectory = "/tmp/";
+extern const string fileDirectory = "/home/trq/fz_vlp16/results/pcd/"; // 退出时自动保存地图/轨迹 pcd 到项目目录(原版 /tmp/ 重启即失)
 
 // Using velodyne cloud "ring" channel for image projection (other lidar may have different name for this channel, change "PointXYZIR" below)
-extern const bool useCloudRing = true; // if true, ang_res_y and ang_bottom are not used
+extern const bool useCloudRing = false; // KITTI: .bin 无 ring 通道, 走垂直角投影分支
 
-// VLP-16
-extern const int N_SCAN = 16;
-extern const int Horizon_SCAN = 1800;
-extern const float ang_res_x = 0.2;
-extern const float ang_res_y = 2.0;
-extern const float ang_bottom = 15.0+0.1;
-extern const int groundScanInd = 7;
+// VLP-16 (原版默认, 实车部署时切回)
+// extern const int N_SCAN = 16;
+// extern const int Horizon_SCAN = 1800;
+// extern const float ang_res_x = 0.2;
+// extern const float ang_res_y = 2.0;
+// extern const float ang_bottom = 15.0+0.1;
+// extern const int groundScanInd = 7;
+
+// HDL-64E (KITTI)
+extern const int N_SCAN = 64;
+extern const int Horizon_SCAN = 2083;
+extern const float ang_res_x = 360.0/float(Horizon_SCAN);
+extern const float ang_res_y = 26.8/float(N_SCAN-1);
+extern const float ang_bottom = 24.8; // 正号: rowIdn=0 对应最底端光束(冒烟测试实测验证)
+extern const int groundScanInd = 48;
 
 // HDL-32E
 // extern const int N_SCAN = 32;
@@ -101,8 +109,8 @@ extern const int groundScanInd = 7;
 // extern const float ang_bottom = 16.6+0.1;
 // extern const int groundScanInd = 15;
 
-extern const bool loopClosureEnableFlag = false;
-extern const double mappingProcessInterval = 0.3;
+extern const bool loopClosureEnableFlag = true;
+extern const double mappingProcessInterval = 0.1; // KITTI 评估: /aft_mapped_to_init 以 10Hz 输出与真值逐行对应
 
 extern const float scanPeriod = 0.1;
 extern const int systemDelay = 0;
