@@ -23,6 +23,7 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(GTSAM REQUIRED QUIET)
 find_package(PCL REQUIRED QUIET)
 find_package(OpenCV REQUIRED QUIET)
+find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 
 catkin_package(
   INCLUDE_DIRS include
@@ -53,8 +54,8 @@ add_executable(featureAssociation src/featureAssociation.cpp)
 add_dependencies(featureAssociation ${catkin_EXPORTED_TARGETS} cloud_msgs_gencpp)
 target_link_libraries(featureAssociation ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})
 
-add_executable(mapOptmization src/mapOptmization.cpp)
-target_link_libraries(mapOptmization ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} gtsam)
+add_executable(mapOptmization src/mapOptmization.cpp src/Scancontext.cpp)
+target_link_libraries(mapOptmization ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} gtsam Eigen3::Eigen)
 
 add_executable(transformFusion src/transformFusion.cpp)
 target_link_libraries(transformFusion ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})

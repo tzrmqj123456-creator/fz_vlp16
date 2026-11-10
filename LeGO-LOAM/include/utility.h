@@ -137,9 +137,9 @@ extern const float nearestFeatureSearchSqDist = 25;
 extern const float surroundingKeyframeSearchRadius = 50.0; // key frame that is within n meters from current pose will be considerd for scan-to-map optimization (when loop closure disabled)
 extern const int   surroundingKeyframeSearchNum = 50; // submap size (when loop closure enabled)
 // history key frames (history submap for loop closure)
-extern const float historyKeyframeSearchRadius = 7.0; // key frame that is within n meters from current pose will be considerd for loop closure
+extern const float historyKeyframeSearchRadius = 20.0; // SC 回环不用此参数(半径搜索候选), 保持 SC 版默认
 extern const int   historyKeyframeSearchNum = 25; // 2n+1 number of hostory key frames will be fused into a submap for loop closure
-extern const float historyKeyframeFitnessScore = 0.3; // the smaller the better alignment
+extern const float historyKeyframeFitnessScore = 0.5; // KITTI 05 实测: 真回环 ICP fitness 0.02~0.03, 假阳性 0.47~0.78; 0.5 可分隔(1.5 原值会放进假回环)
 
 extern const float globalMapVisualizationSearchRadius = 500.0; // key frames with in n meters will be visualized
 
