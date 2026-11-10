@@ -1,0 +1,42 @@
+<launch>
+
+    <!-- YOLOv8-seg 动态滤除 + LeGO-LOAM 完整管线
+         与 run.launch 的区别: imageProjection/mapOptmization 的点云话题
+         从 /velodyne_points 重映射为滤除后的 /points_dyn_filtered -->
+    <arg name="img_dir" default="/home/trq/fz_vlp16/dataset/raw_05/image_02/data"/>
+    <arg name="calib_path" default="/home/trq/fz_vlp16/data_odometry_calib/dataset/sequences/05/calib.txt"/>
+
+    <!--- Sim Time -->
+    <param name="/use_sim_time" value="false" />
+
+    <!--- Run Rviz-->
+    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find lego_loam)/launch/test.rviz" />
+
+    <!--- TF (与 run.launch 一致) -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="camera_init_to_map"  args="0 0 0 1.570795   0        1.570795 map    camera_init" />
+    <node pkg="tf2_ros" type="static_transform_publisher" name="base_link_to_camera" args="0 0 0 -1.570795 -1.570795 0        camera base_link" />
+    <node pkg="tf2_ros" type="static_transform_publisher" name="base_link_to_velodyne" args="0 0 0 1.570795 -1.570795 0 base_link velodyne" />
+    <node pkg="tf2_ros" type="static_transform_publisher" name="aft_mapped_to_camera" args="0 0 0 0 0 0 aft_mapped camera" />
+
+    <!--- 视觉动态滤除 -->
+    <node pkg="lego_loam_dyn" type="kitti_image_player.py" name="kitti_image_player" output="screen">
+        <param name="img_dir" value="$(arg img_dir)"/>
+    </node>
+    <node pkg="lego_loam_dyn" type="dyn_filter.py" name="dyn_filter" output="screen">
+        <param name="calib_path" value="$(arg calib_path)"/>
+        <param name="model" value="yolov8s-seg.pt"/>
+        <param name="conf_thres" value="0.35"/>
+        <param name="dilate_px" value="3"/>
+    </node>
+
+    <!--- LeGO-LOAM (imageProjection/mapOptmization 消费滤除后的点云) -->
+    <node pkg="lego_loam" type="imageProjection"    name="imageProjection"    output="screen">
+        <remap from="/velodyne_points" to="/points_dyn_filtered"/>
+    </node>
+    <node pkg="lego_loam" type="featureAssociation" name="featureAssociation" output="screen"/>
+    <node pkg="lego_loam" type="mapOptmization"     name="mapOptmization"     output="screen">
+        <remap from="/velodyne_points" to="/points_dyn_filtered"/>
+    </node>
+    <node pkg="lego_loam" type="transformFusion"    name="transformFusion"    output="screen"/>
+
+</launch>
