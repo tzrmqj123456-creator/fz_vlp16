@@ -12,6 +12,7 @@ import cv2
 import rospy
 import message_filters
 import sensor_msgs.point_cloud2 as pc2
+from message_filters import TimeSynchronizer
 from sensor_msgs.msg import Image, PointCloud2
 from cv_bridge import CvBridge
 from ultralytics import YOLO
@@ -36,7 +37,8 @@ class DynFilter:
 
         img_sub = message_filters.Subscriber('/kitti/camera_color_left/image_raw', Image)
         pc_sub = message_filters.Subscriber('/velodyne_points', PointCloud2)
-        ts = message_filters.ApproximateTimeSynchronizer([img_sub, pc_sub], 10, 0.08)
+        # 图像与点云由 kitti_dyn_player 同进程同时间戳发布 -> 精确同步
+        ts = TimeSynchronizer([img_sub, pc_sub], 10)
         ts.registerCallback(self.cb)
 
         self.pub = rospy.Publisher('/points_dyn_filtered', PointCloud2, queue_size=2)
@@ -61,11 +63,14 @@ class DynFilter:
         img = self.bridge.imgmsg_to_cv2(img_msg, 'bgr8')
         H, W = img.shape[:2]
 
-        # 1. YOLOv8-seg 推理, 取动态类别实例掩膜 (原图分辨率, (n, H, W))
+        # 1. YOLOv8-seg 推理, 取动态类别实例掩膜 (推理尺寸 -> 重采样回原图尺寸)
         res = self.model(img, conf=self.conf, classes=DYNAMIC_CLASSES, verbose=False)[0]
         mask = np.zeros((H, W), bool)
         if res.masks is not None:
-            masks = res.masks.data.cpu().numpy().astype(bool)
+            masks = res.masks.data.cpu().numpy().astype(bool)  # (n, hm, wm) 推理分辨率
+            masks = np.stack([cv2.resize(m.astype(np.uint8), (W, H),
+                                         interpolation=cv2.INTER_NEAREST).astype(bool)
+                              for m in masks])
             if self.dilate_px > 0:
                 k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
                                               (2 * self.dilate_px + 1, 2 * self.dilate_px + 1))

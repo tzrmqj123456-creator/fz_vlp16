@@ -1,10 +1,11 @@
 <launch>
 
     <!-- YOLOv8-seg 动态滤除 + LeGO-LOAM 完整管线
-         与 run.launch 的区别: imageProjection/mapOptmization 的点云话题
-         从 /velodyne_points 重映射为滤除后的 /points_dyn_filtered -->
-    <arg name="img_dir" default="/home/trq/fz_vlp16/dataset/raw_05/image_02/data"/>
-    <arg name="calib_path" default="/home/trq/fz_vlp16/data_odometry_calib/dataset/sequences/05/calib.txt"/>
+         与 run.launch 的区别: ①同步播放器同时间戳发图像+点云 ②imageProjection/mapOptmization
+         的点云话题从 /velodyne_points 重映射为滤除后的 /points_dyn_filtered -->
+    <arg name="img_dir" default="/home/trq/fz_vlp16/05_image/image_2"/>
+    <arg name="velodyne_dir" default="/home/trq/fz_vlp16/dataset/sequences/05/velodyne"/>
+    <arg name="calib_path" default="/home/trq/fz_vlp16/05_image/calib.txt"/>
 
     <!--- Sim Time -->
     <param name="/use_sim_time" value="false" />
@@ -18,13 +19,10 @@
     <node pkg="tf2_ros" type="static_transform_publisher" name="base_link_to_velodyne" args="0 0 0 1.570795 -1.570795 0 base_link velodyne" />
     <node pkg="tf2_ros" type="static_transform_publisher" name="aft_mapped_to_camera" args="0 0 0 0 0 0 aft_mapped camera" />
 
-    <!--- 视觉动态滤除 -->
-    <node pkg="lego_loam_dyn" type="kitti_image_player.py" name="kitti_image_player" output="screen">
-        <param name="img_dir" value="$(arg img_dir)"/>
-    </node>
+    <!--- 视觉动态滤除 (播放器 kitti_dyn_player 由 kitti_play_dyn.sh 启动, 与轨迹记录同步开始) -->
     <node pkg="lego_loam_dyn" type="dyn_filter.py" name="dyn_filter" output="screen">
         <param name="calib_path" value="$(arg calib_path)"/>
-        <param name="model" value="yolov8s-seg.pt"/>
+        <param name="model" value="$(find lego_loam_dyn)/models/yolov8s-seg.pt"/>
         <param name="conf_thres" value="0.35"/>
         <param name="dilate_px" value="3"/>
     </node>

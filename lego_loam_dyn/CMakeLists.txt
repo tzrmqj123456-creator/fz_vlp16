@@ -12,6 +12,6 @@ catkin_package()
 
 catkin_install_python(PROGRAMS
   scripts/dyn_filter.py
-  scripts/kitti_image_player.py
+  scripts/kitti_dyn_player.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
