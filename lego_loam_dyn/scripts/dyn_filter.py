@@ -42,6 +42,8 @@ class DynFilter:
 
         self.pub = rospy.Publisher('/points_dyn_filtered', PointCloud2, queue_size=2)
         self.pub_mask_img = rospy.Publisher('/dyn_filter/mask_debug', Image, queue_size=2) if self.pub_debug else None
+        self.pub_proj_img = rospy.Publisher('/dyn_filter/projection_debug', Image, queue_size=2) if self.pub_debug else None
+        self.proj_step = rospy.get_param('~proj_step', 5)  # 投影图每 N 个点画 1 个
         rospy.loginfo('[dyn_filter] 就绪: model=%s conf=%.2f dilate=%dpx', model_name, self.conf, self.dilate_px)
 
     @staticmethod
@@ -117,6 +119,25 @@ class DynFilter:
             dbg = img.copy()
             dbg[mask] = (dbg[mask] * 0.4 + np.array([0, 0, 180], np.uint8) * 0.6).astype(np.uint8)
             self.pub_mask_img.publish(self.bridge.cv2_to_imgmsg(dbg, 'bgr8'))
+
+        if self.pub_proj_img is not None:
+            # 点云投影图: 图像与点云同一坐标系(像素平面), 保留点按深度着色, 剔除的动态点标红
+            depth_img = np.zeros((H, W), np.uint8)
+            ik = np.where(keep)[0][::self.proj_step]
+            uk, vk = u[ik], v[ik]
+            vk_valid = (uk >= 0) & (uk < W) & (vk >= 0) & (vk < H)
+            uk, vk = uk[vk_valid], vk[vk_valid]
+            if len(uk) > 0:
+                dep = np.linalg.norm(pts[ik][vk_valid, :3], axis=1)
+                dnorm = np.clip((dep - dep.min()) / (dep.max() - dep.min() + 1e-6), 0, 1)
+                depth_img[vk, uk] = (dnorm * 255).astype(np.uint8)
+            colored = cv2.applyColorMap(depth_img, cv2.COLORMAP_JET)
+            vis = cv2.addWeighted(img, 0.45, colored, 0.55, 0)
+            id_ = np.where(drop)[0][::self.proj_step]
+            ud, vd = u[id_], v[id_]
+            vd_valid = (ud >= 0) & (ud < W) & (vd >= 0) & (vd < H)
+            vis[vd[vd_valid], ud[vd_valid]] = (0, 0, 255)
+            self.pub_proj_img.publish(self.bridge.cv2_to_imgmsg(vis, 'bgr8'))
         rospy.loginfo_throttle(5, '[dyn_filter] 帧 %s: %d/%d 点剔除, 掩膜实例 %d',
                                pc_msg.header.stamp, int(drop.sum()), N, int(mask.sum() > 0))
 

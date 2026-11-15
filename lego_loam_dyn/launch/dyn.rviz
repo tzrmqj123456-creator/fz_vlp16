@@ -69,6 +69,18 @@ Visualization Manager:
       Unreliable: false
       Value: true
     - Class: rviz/Axes
+    - Class: rviz/Image
+      Enabled: true
+      Image Topic: /dyn_filter/projection_debug
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: 点云投影
+      Normalize Range: true
+      Queue Size: 2
+      Transport Hint: raw
+      Unreliable: false
+      Value: true
       Enabled: true
       Length: 2
       Name: map
