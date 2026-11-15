@@ -5,7 +5,7 @@
          的点云话题从 /velodyne_points 重映射为滤除后的 /points_dyn_filtered -->
     <arg name="img_dir" default="/home/trq/fz_vlp16/05_image/image_2"/>
     <arg name="velodyne_dir" default="/home/trq/fz_vlp16/dataset/sequences/05/velodyne"/>
-    <arg name="calib_path" default="/home/trq/fz_vlp16/05_image/calib.txt"/>
+    <arg name="calib_path" default="/home/trq/fz_vlp16/data_odometry_calib/dataset/sequences/05/calib.txt"/>
 
     <!--- Sim Time -->
     <param name="/use_sim_time" value="false" />

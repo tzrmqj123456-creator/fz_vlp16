@@ -29,8 +29,7 @@ class DynFilter:
         self.dilate_px = rospy.get_param('~dilate_px', 3)
         self.pub_debug = rospy.get_param('~pub_debug', True)
 
-        self.P2, self.R0, self.Tr = self.load_calib(calib_path)
-        self.P = self.P2 @ self.R0 @ self.Tr  # 3x4: velodyne -> 左目像素
+        self.P = self.load_calib(calib_path)  # 3x4: velodyne -> 左目(rectified)像素
         rospy.loginfo('[dyn_filter] 投影矩阵 P = %s', np.array2string(self.P, precision=3))
         self.model = YOLO(model_name)
         self.bridge = CvBridge()
@@ -47,17 +46,26 @@ class DynFilter:
 
     @staticmethod
     def load_calib(path):
-        """解析 KITTI calib.txt: P2(3x4), R0_rect(3x3), Tr_velo_to_cam(3x4)"""
+        """解析 KITTI 标定, 返回 3x4 投影矩阵 P (velodyne -> rectified 左目像素)
+        支持两种格式:
+          raw 格式:      P = P2 @ R0_rect @ Tr_velo_to_cam (calib.txt 只有 P0-P3 时缺这两项,
+                         它们在 calib_cam_to_cam.txt / calib_velo_to_cam.txt 里, 勿用)
+          odometry 格式: P = P2 @ Tr (Tr 已折叠 rectification, 推荐用 data_odometry_calib 的 calib.txt)"""
         data = {}
         with open(path) as f:
             for line in f:
+                if ':' not in line:
+                    continue
                 k, v = line.split(':', 1)
                 data[k.strip()] = np.array([float(x) for x in v.split()])
         P2 = data['P2'].reshape(3, 4)
-        R0 = np.eye(4)
-        R0[:3, :3] = data['R0_rect'].reshape(3, 3)
-        Tr = data['Tr_velo_to_cam'].reshape(3, 4)
-        return P2, R0, Tr
+        if 'R0_rect' in data and 'Tr_velo_to_cam' in data:
+            R0 = np.eye(4)
+            R0[:3, :3] = data['R0_rect'].reshape(3, 3)
+            return P2 @ R0 @ data['Tr_velo_to_cam'].reshape(3, 4)
+        if 'Tr' in data:
+            return P2 @ data['Tr'].reshape(3, 4)
+        raise KeyError('标定文件缺 R0_rect/Tr_velo_to_cam/Tr: %s' % path)
 
     def cb(self, img_msg, pc_msg):
         img = self.bridge.imgmsg_to_cv2(img_msg, 'bgr8')
