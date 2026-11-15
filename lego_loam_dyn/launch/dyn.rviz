@@ -56,17 +56,6 @@ Visualization Manager:
       Transport Hint: raw
       Unreliable: false
       Value: true
-    - Class: rviz/Image
-      Enabled: true
-      Image Topic: /kitti/camera_color_left/image_raw
-      Max Value: 1
-      Median window: 5
-      Min Value: 0
-      Name: 相机图像
-      Normalize Range: true
-      Queue Size: 2
-      Transport Hint: raw
-      Unreliable: false
       Value: true
     - Class: rviz/Axes
     - Class: rviz/Image

@@ -132,7 +132,10 @@ class DynFilter:
                 dnorm = np.clip((dep - dep.min()) / (dep.max() - dep.min() + 1e-6), 0, 1)
                 depth_img[vk, uk] = (dnorm * 255).astype(np.uint8)
             colored = cv2.applyColorMap(depth_img, cv2.COLORMAP_JET)
-            vis = cv2.addWeighted(img, 0.45, colored, 0.55, 0)
+            vis = img.copy()
+            # 只给有点的像素着色, 背景保持原图(否则无点区域被 JET 的 0=深蓝 染蓝)
+            pmask = depth_img > 0
+            vis[pmask] = (img[pmask] * 0.25 + colored[pmask] * 0.75).astype(np.uint8)
             id_ = np.where(drop)[0][::self.proj_step]
             ud, vd = u[id_], v[id_]
             vd_valid = (ud >= 0) & (ud < W) & (vd >= 0) & (vd < H)
