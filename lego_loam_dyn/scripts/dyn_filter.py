@@ -59,12 +59,16 @@ class DynFilter:
                 k, v = line.split(':', 1)
                 data[k.strip()] = np.array([float(x) for x in v.split()])
         P2 = data['P2'].reshape(3, 4)
+
+        def to_4x4(tr):
+            return np.vstack([tr.reshape(3, 4), [0.0, 0.0, 0.0, 1.0]])
+
         if 'R0_rect' in data and 'Tr_velo_to_cam' in data:
             R0 = np.eye(4)
             R0[:3, :3] = data['R0_rect'].reshape(3, 3)
-            return P2 @ R0 @ data['Tr_velo_to_cam'].reshape(3, 4)
+            return P2 @ R0 @ to_4x4(data['Tr_velo_to_cam'])
         if 'Tr' in data:
-            return P2 @ data['Tr'].reshape(3, 4)
+            return P2 @ to_4x4(data['Tr'])
         raise KeyError('标定文件缺 R0_rect/Tr_velo_to_cam/Tr: %s' % path)
 
     def cb(self, img_msg, pc_msg):

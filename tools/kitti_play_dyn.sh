@@ -14,7 +14,7 @@ REC=$!
 
 start=$(date +%s)
 stdbuf -oL rosrun lego_loam_dyn kitti_dyn_player.py \
-  _img_dir:=/home/trq/fz_vlp16/05_image/image_2 \
+  _img_dir:=/home/trq/fz_vlp16/05_image/image_2_jpg \
   _velodyne_dir:=/home/trq/fz_vlp16/dataset/sequences/${SEQ}/velodyne 2>&1 | tail -3
 sleep 8   # 让最后几帧走完管线
 kill $REC 2>/dev/null

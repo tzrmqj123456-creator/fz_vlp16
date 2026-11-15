@@ -37,6 +37,11 @@ def main():
               pc2.PointField('z', 8, pc2.PointField.FLOAT32, 1),
               pc2.PointField('intensity', 12, pc2.PointField.FLOAT32, 1)]
 
+    # 仿真时间戳: 帧号 x 0.1s(与 KITTI 原始 10Hz 对齐), 与播放耗时无关。
+    # 否则 Python 播放器每帧 175ms 会把时间轴拉长 1.75 倍, evo 按时间配对 GT 全错位。
+    t0_sim = rospy.Time.now()
+    dt = 1.0 / rate
+
     r = rospy.Rate(rate)
     for i in range(n):
         if rospy.is_shutdown():
@@ -49,7 +54,7 @@ def main():
             img = cv2.resize(img, (img_w, img_h))
         pts = np.fromfile(os.path.join(vel_dir, files_vel[i]), np.float32).reshape(-1, 4)
 
-        stamp = rospy.Time.now()
+        stamp = rospy.Time.from_sec(t0_sim.to_sec() + i * dt)
         m_img = bridge.cv2_to_imgmsg(img, 'bgr8')
         m_img.header.stamp = stamp
         m_img.header.frame_id = 'camera_color_left'
