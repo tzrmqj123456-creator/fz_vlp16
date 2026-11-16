@@ -38,7 +38,7 @@ STEP = 10  # 每 10 帧评估 1 帧
 MIN_INST_PTS = 10
 
 sys.path.insert(0, f'{ROOT}/lego_loam_dyn/scripts')
-from geo_confirm import GeoConfirm, quat_rotate, largest_cluster
+from geo_confirm import GeoConfirm, quat_rotate
 
 
 def load_calib():
@@ -77,7 +77,7 @@ def main():
     geo_on = odom_ts is not None
     if not geo_on:
         print('警告: 无 /tmp/aft_05.csv, 几何二次确认关闭(纯外观法结果)')
-    gc = GeoConfirm(max_scans=20, voxel=1.0, nn_dist=1.0, moving_ratio=0.5)
+    gc = GeoConfirm(max_scans=25, voxel=1.0, nn_dist=0.5, static_ratio=0.7)
 
     files = sorted(f for f in os.listdir(IMG_DIR) if f.endswith('.jpg'))
     tot = tp = fp = fn = 0
@@ -131,14 +131,12 @@ def main():
         drop = np.zeros(N, bool)
         if masks is not None and geo_on:
             valid_idx = np.where(in_img)[0]
-            rr, cc = v[valid_idx], u[valid_idx]  # 掩膜索引: m[行=v, 列=u]
+            rows, cols = v[valid_idx], u[valid_idx]  # 掩膜索引: m[行=v, 列=u]
             for m in masks:
-                idx = valid_idx[m[rr, cc]]
+                idx = valid_idx[m[rows, cols]]
                 if len(idx) == 0:
                     continue
-                # 3D 聚类摘出物体本体, 只对本体簇做判定 (与 dyn_filter 一致)
-                clu = largest_cluster(pts[idx, :3])
-                if len(clu) < MIN_INST_PTS or gc.is_moving(world[idx[clu]]):
+                if len(idx) < MIN_INST_PTS or not gc.is_static(world[idx]):
                     drop[idx] = True
                 else:
                     n_static_saved += 1

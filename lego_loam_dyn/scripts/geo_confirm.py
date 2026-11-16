@@ -29,53 +29,22 @@ def quat_rotate(q, pts):
     return pts @ R.T
 
 
-def largest_cluster(pts, eps=0.8):
-    """欧式聚类, 返回最大簇的点索引 (从物体本体上摘出, 排除掩膜混入的路面/背景点)"""
-    n = len(pts)
-    if n == 0:
-        return np.array([], np.int64)
-    tree = cKDTree(pts)
-    visited = np.zeros(n, bool)
-    best = np.array([], np.int64)
-    for seed in range(n):
-        if visited[seed]:
-            continue
-        stack = [seed]
-        visited[seed] = True
-        clu = []
-        while stack:
-            i = stack.pop()
-            clu.append(i)
-            for j in tree.query_ball_point(pts[i], eps):
-                if not visited[j]:
-                    visited[j] = True
-                    stack.append(j)
-        if len(clu) > len(best):
-            best = np.array(clu, np.int64)
-    return best
-
-
 class GeoConfirm:
-    def __init__(self, max_scans=20, voxel=1.0, nn_dist=0.5, moving_ratio=0.2,
-                 rebuild_every=3.0, map_subsample=2):
+    def __init__(self, max_scans=25, voxel=1.0, nn_dist=0.5, static_ratio=0.7, rebuild_every=1.5):
         self.max_scans = max_scans
         self.voxel = voxel
         self.nn_dist = nn_dist
-        self.moving_ratio = moving_ratio
+        self.static_ratio = static_ratio
         self.rebuild_every = rebuild_every
-        self.map_subsample = map_subsample
         self.buffer = deque()
         self.tree = None
         self.last_build = -1e9
 
     def add_scan(self, pts_world):
-        """入图: 原始(未滤除)点云, 降采样 + 体素降采样后入环形缓冲
-        性能: 体素格打包成 int64 一维后 unique(比 axis=0 三维 unique 快数倍)"""
-        pts = pts_world[::self.map_subsample]
-        q = (pts / self.voxel).round().astype(np.int32)
-        packed = q[:, 0].astype(np.int64) * 16777216 + q[:, 1].astype(np.int64) * 4096 + q[:, 2].astype(np.int64)
-        _, idx = np.unique(packed, return_index=True)
-        self.buffer.append(pts[idx])
+        """入图: 原始(未滤除)点云, 体素降采样后入环形缓冲"""
+        q = (pts_world / self.voxel).round().astype(np.int32)
+        _, idx = np.unique(q, axis=0, return_index=True)
+        self.buffer.append(pts_world[idx])
         while len(self.buffer) > self.max_scans:
             self.buffer.popleft()
 
@@ -85,16 +54,12 @@ class GeoConfirm:
             self.tree = cKDTree(np.vstack(list(self.buffer)))
             self.last_build = now
 
-    def moving_fraction(self, pts_world):
-        """候选点中【远离】静态地图的比例; 无地图返回 1.0(保守: 视为动态)
-        反向判定: 掩膜会混入路面/背景点(天然与地图重合), 用'重合比例高判静态'会被背景点冲垮;
-        '远离比例'只统计物体自身的点, parked≈0, moving 明显>0"""
-        if self.tree is None:
-            return 1.0
-        if len(pts_world) == 0:
+    def static_fraction(self, pts_world):
+        """候选点与静态地图的重合比例; 无地图返回 0(保守: 视为动态)"""
+        if self.tree is None or len(pts_world) == 0:
             return 0.0
         d, _ = self.tree.query(pts_world, k=1)
-        return float((d > self.nn_dist).mean())
+        return float((d < self.nn_dist).mean())
 
-    def is_moving(self, pts_world):
-        return self.moving_fraction(pts_world) > self.moving_ratio
+    def is_static(self, pts_world):
+        return self.static_fraction(pts_world) >= self.static_ratio
