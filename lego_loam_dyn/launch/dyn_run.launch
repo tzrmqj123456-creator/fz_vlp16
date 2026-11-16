@@ -25,6 +25,11 @@
         <param name="model" value="$(find lego_loam_dyn)/models/yolov8s-seg.pt"/>
         <param name="conf_thres" value="0.35"/>
         <param name="dilate_px" value="3"/>
+        <param name="geo_check" value="true"/>
+        <param name="map_scans" value="25"/>
+        <param name="map_voxel" value="1.0"/>
+        <param name="nn_dist" value="0.5"/>
+        <param name="static_ratio" value="0.7"/>
     </node>
 
     <!--- LeGO-LOAM (imageProjection/mapOptmization 消费滤除后的点云) -->
