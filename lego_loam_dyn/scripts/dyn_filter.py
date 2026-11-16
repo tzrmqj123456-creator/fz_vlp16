@@ -140,9 +140,9 @@ class DynFilter:
         if res.masks is not None and have_odom and self.geo_check:
             # 每个检测实例单独判定: 与局部静态地图重合 -> parked(保留), 残差大 -> moving(剔除)
             valid_idx = np.where(in_img)[0]
-            rows, cols = v[valid_idx], u[valid_idx]  # 掩膜索引: m[行=v, 列=u]
+            vu, vv = v[valid_idx], u[valid_idx]
             for m in masks:
-                mem = m[rows, cols]
+                mem = m[vv, vu]
                 idx = valid_idx[mem]
                 if len(idx) == 0:
                     continue
