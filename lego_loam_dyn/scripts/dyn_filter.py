@@ -7,9 +7,6 @@ YOLOv8-seg 视觉辅助动态点滤除节点
 KITTI 投影链: X_cam = P2 @ R0_rect @ Tr_velo_to_cam @ [x,y,z,1]
 评估 GT 建议: SemanticKITTI moving 标注
 """
-import os
-import sys
-
 import numpy as np
 import cv2
 import rospy
@@ -17,12 +14,8 @@ import message_filters
 import sensor_msgs.point_cloud2 as pc2
 from message_filters import TimeSynchronizer
 from sensor_msgs.msg import Image, PointCloud2
-from nav_msgs.msg import Odometry
 from cv_bridge import CvBridge
 from ultralytics import YOLO
-
-sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from geo_confirm import GeoConfirm, quat_rotate
 
 # COCO 动态类别白名单: person, bicycle, car, motorcycle, bus, train, truck
 DYNAMIC_CLASSES = [0, 1, 2, 3, 5, 6, 7]
@@ -46,20 +39,6 @@ class DynFilter:
         # 图像与点云由 kitti_dyn_player 同进程同时间戳发布 -> 精确同步
         ts = TimeSynchronizer([img_sub, pc_sub], 10)
         ts.registerCallback(self.cb)
-
-        # 里程计(用于几何二次确认): 地图与候选点都变换到 camera_init 世界系
-        self.odom_pose = None  # ((qx,qy,qz,qw), (tx,ty,tz), stamp)
-        rospy.Subscriber('/aft_mapped_to_init', Odometry, self.odom_cb)
-
-        # 几何二次确认: parked/moving 判定 (外观法会把停着的车误删, 此步救回)
-        self.geo_check = rospy.get_param('~geo_check', True)
-        self.gc = GeoConfirm(max_scans=rospy.get_param('~map_scans', 25),
-                             voxel=rospy.get_param('~map_voxel', 1.0),
-                             nn_dist=rospy.get_param('~nn_dist', 0.5),
-                             static_ratio=rospy.get_param('~static_ratio', 0.7))
-        rospy.loginfo('[dyn_filter] 几何二次确认: %s (map_scans=%d voxel=%.1f nn=%.1fm ratio=%.2f)',
-                      '开' if self.geo_check else '关',
-                      self.gc.max_scans, self.gc.voxel, self.gc.nn_dist, self.gc.static_ratio)
 
         self.pub = rospy.Publisher('/points_dyn_filtered', PointCloud2, queue_size=2)
         self.pub_mask_img = rospy.Publisher('/dyn_filter/mask_debug', Image, queue_size=2) if self.pub_debug else None
@@ -120,7 +99,7 @@ class DynFilter:
         else:
             pts = np.array(list(pc2.read_points(pc_msg, skip_nans=True)), np.float32)
 
-        # 3. 投影 + 实例级剔除判定 (几何二次确认)
+        # 3. 投影滤除 (向量化)
         N = len(pts)
         xyz1 = np.hstack([pts[:, :3], np.ones((N, 1))]).T
         X = self.P @ xyz1
@@ -129,31 +108,8 @@ class DynFilter:
         u = np.round(X[0] / np.maximum(Z, 1e-6)).astype(np.int64)
         v = np.round(X[1] / np.maximum(Z, 1e-6)).astype(np.int64)
         in_img = valid & (u >= 0) & (u < W) & (v >= 0) & (v < H)
-
-        have_odom = self.odom_pose is not None
-        world_pts = None
-        if have_odom:
-            q, t, _ = self.odom_pose
-            world_pts = quat_rotate(q, pts[:, :3]) + t
-
         drop = np.zeros(N, bool)
-        if res.masks is not None and have_odom and self.geo_check:
-            # 每个检测实例单独判定: 与局部静态地图重合 -> parked(保留), 残差大 -> moving(剔除)
-            valid_idx = np.where(in_img)[0]
-            vu, vv = v[valid_idx], u[valid_idx]
-            for m in masks:
-                mem = m[vv, vu]
-                idx = valid_idx[mem]
-                if len(idx) == 0:
-                    continue
-                if len(idx) < 10 or not self.gc.is_static(world_pts[idx]):
-                    drop[idx] = True
-            # 先检查后入图: 原始点云入图(parked 车救回的关键), 当前帧不参与自身判定
-            self.gc.add_scan(world_pts)
-            self.gc.maybe_rebuild(img_msg.header.stamp.to_sec())
-        else:
-            # 无里程计或关闭几何确认: 外观法回退
-            drop[in_img] = mask[v[in_img], u[in_img]]
+        drop[in_img] = mask[v[in_img], u[in_img]]
         keep = ~drop
 
         # 4. 发布静态点云 (保留原字段结构)
@@ -187,11 +143,6 @@ class DynFilter:
             self.pub_proj_img.publish(self.bridge.cv2_to_imgmsg(vis, 'bgr8'))
         rospy.loginfo_throttle(5, '[dyn_filter] 帧 %s: %d/%d 点剔除, 掩膜实例 %d',
                                pc_msg.header.stamp, int(drop.sum()), N, int(mask.sum() > 0))
-
-    def odom_cb(self, msg):
-        o = msg.pose.pose.orientation
-        p = msg.pose.pose.position
-        self.odom_pose = ((o.x, o.y, o.z, o.w), (p.x, p.y, p.z), msg.header.stamp.to_sec())
 
 
 if __name__ == '__main__':
