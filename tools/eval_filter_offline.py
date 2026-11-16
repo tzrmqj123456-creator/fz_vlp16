@@ -131,9 +131,9 @@ def main():
         drop = np.zeros(N, bool)
         if masks is not None and geo_on:
             valid_idx = np.where(in_img)[0]
-            vu, vv = v[valid_idx], u[valid_idx]
+            rows, cols = v[valid_idx], u[valid_idx]  # 掩膜索引: m[行=v, 列=u]
             for m in masks:
-                idx = valid_idx[m[vv, vu]]
+                idx = valid_idx[m[rows, cols]]
                 if len(idx) == 0:
                     continue
                 if len(idx) < MIN_INST_PTS or not gc.is_static(world[idx]):
