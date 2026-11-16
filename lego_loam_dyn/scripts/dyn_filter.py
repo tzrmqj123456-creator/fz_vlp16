@@ -22,7 +22,7 @@ from cv_bridge import CvBridge
 from ultralytics import YOLO
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from geo_confirm import GeoConfirm, quat_rotate
+from geo_confirm import GeoConfirm, quat_rotate, largest_cluster
 
 # COCO 动态类别白名单: person, bicycle, car, motorcycle, bus, train, truck
 DYNAMIC_CLASSES = [0, 1, 2, 3, 5, 6, 7]
@@ -53,13 +53,13 @@ class DynFilter:
 
         # 几何二次确认: parked/moving 判定 (外观法会把停着的车误删, 此步救回)
         self.geo_check = rospy.get_param('~geo_check', True)
-        self.gc = GeoConfirm(max_scans=rospy.get_param('~map_scans', 25),
+        self.gc = GeoConfirm(max_scans=rospy.get_param('~map_scans', 20),
                              voxel=rospy.get_param('~map_voxel', 1.0),
-                             nn_dist=rospy.get_param('~nn_dist', 0.5),
-                             static_ratio=rospy.get_param('~static_ratio', 0.7))
-        rospy.loginfo('[dyn_filter] 几何二次确认: %s (map_scans=%d voxel=%.1f nn=%.1fm ratio=%.2f)',
+                             nn_dist=rospy.get_param('~nn_dist', 1.0),
+                             moving_ratio=rospy.get_param('~moving_ratio', 0.5))
+        rospy.loginfo('[dyn_filter] 几何二次确认: %s (map_scans=%d voxel=%.1f nn=%.1fm moving_ratio=%.2f)',
                       '开' if self.geo_check else '关',
-                      self.gc.max_scans, self.gc.voxel, self.gc.nn_dist, self.gc.static_ratio)
+                      self.gc.max_scans, self.gc.voxel, self.gc.nn_dist, self.gc.moving_ratio)
 
         self.pub = rospy.Publisher('/points_dyn_filtered', PointCloud2, queue_size=2)
         self.pub_mask_img = rospy.Publisher('/dyn_filter/mask_debug', Image, queue_size=2) if self.pub_debug else None
@@ -146,7 +146,9 @@ class DynFilter:
                 idx = valid_idx[mem]
                 if len(idx) == 0:
                     continue
-                if len(idx) < 10 or not self.gc.is_static(world_pts[idx]):
+                # 3D 聚类摘出物体本体(排除掩膜混入的路面/背景点), 只对本体簇做 parked/moving 判定
+                clu = largest_cluster(pts[idx, :3])
+                if len(clu) < 10 or self.gc.is_moving(world_pts[idx[clu]]):
                     drop[idx] = True
             # 先检查后入图: 原始点云入图(parked 车救回的关键), 当前帧不参与自身判定
             self.gc.add_scan(world_pts)
