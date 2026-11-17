@@ -84,8 +84,7 @@ def main():
     track_on = odom_ts is not None
     if not track_on:
         print('警告: 无 /tmp/aft_05.csv, 多帧跟踪关闭(纯外观法结果)')
-    residual = StaticMapResidual(max_scans=15, voxel=1.0, nn_thresh=NN_THRESH,
-                                 rebuild_every=2.0, map_subsample=3)
+    residual = StaticMapResidual(max_scans=30, voxel=1.0, nn_thresh=NN_THRESH)
 
     files = sorted(f for f in os.listdir(IMG_DIR) if f.endswith('.jpg'))
     tp = fp = fn = 0

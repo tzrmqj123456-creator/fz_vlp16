@@ -53,11 +53,9 @@ class DynFilter:
         self.track_check = rospy.get_param('~track_check', True)
         self.odom_buf = deque(maxlen=30)  # [(t, q, xyz)]
         rospy.Subscriber('/aft_mapped_to_init', Odometry, self.odom_cb)
-        self.residual = StaticMapResidual(max_scans=rospy.get_param('~map_scans', 15),
+        self.residual = StaticMapResidual(max_scans=rospy.get_param('~map_scans', 30),
                                           voxel=rospy.get_param('~map_voxel', 1.0),
-                                          nn_thresh=rospy.get_param('~nn_thresh', 0.4),
-                                          rebuild_every=2.0,
-                                          map_subsample=3)
+                                          nn_thresh=rospy.get_param('~nn_thresh', 0.4))
         self.cluster_eps = rospy.get_param('~cluster_eps', 0.8)
         self.min_cluster_pts = rospy.get_param('~min_cluster_pts', 10)
         rospy.loginfo('[dyn_filter] 多帧运动确认: %s (静态地图残差 nn_thresh=%.1fm, map_scans=%d)',
