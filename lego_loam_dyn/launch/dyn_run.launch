@@ -26,7 +26,7 @@
         <param name="conf_thres" value="0.35"/>
         <param name="dilate_px" value="3"/>
         <param name="track_check" value="true"/>
-        <param name="map_scans" value="30"/>
+        <param name="map_scans" value="15"/>
         <param name="map_voxel" value="1.0"/>
         <param name="nn_thresh" value="0.4"/>
         <param name="cluster_eps" value="0.8"/>
