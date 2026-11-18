@@ -939,11 +939,11 @@ public:
             return false;
         }
 
-        // time gate 2: cooldown after the last SC loop factor (avoid exact-duplicate factors, but keep the
-        // revisit chain tying consecutive key frames: KITTI 05 末端重访链每秒一帧, 3 s 冷却可连续绑定把
-        // 回环"钉死"(历史最佳轮 kf1177-14 闭合到 0.27m); 30 s 冷却只加 1 个因子, 回环残留 8.5m)
-        if (timeLaserOdometry - timeLastSCloopAdded < 3.0){
-            std::cout << "[SC] Skip this loop (within 3.0 s after the last SC loop factor was added)" << std::endl;
+        // time gate 2: cooldown after the last SC loop factor (2026-11-18: 3s->10s 末端擦肩链限幅——
+        // 末端链后段锚点 GT 实测漂移到 33~90m 假阳性, 10s 冷却只保留链首最强锚点, 中段穿越链仍可
+        // 添加 2~3 个精确因子; 同时防 1Hz 回环线程重复添加相同因子)
+        if (timeLaserOdometry - timeLastSCloopAdded < 10.0){
+            std::cout << "[SC] Skip this loop (within 10.0 s after the last SC loop factor was added)" << std::endl;
             return false;
         }
 
@@ -1027,6 +1027,9 @@ public:
         /*
          * 1. RS loop factor (radius search)
          */
+        // 关闭 RS 因子(2026-11-18 决定): GT 多轮实测 RS "取最老"策略锚点系统性偏早 17~22m,
+        // 与 SC 精确锚点(0.1~1.3m)冲突会把轨迹拉偏。SC 因子保留。若恢复 RS, 删除下一行。
+        RSclosestHistoryFrameID = -1;
         if( RSclosestHistoryFrameID != -1 ) {
             pcl::IterativeClosestPoint<PointType, PointType> icp;
             icp.setMaxCorrespondenceDistance(100);
