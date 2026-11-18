@@ -14,8 +14,6 @@ KITTI 投影链: X_cam = P2 @ Tr @ [x,y,z,1]
 """
 import os
 import sys
-import queue
-import threading
 from collections import deque
 
 import numpy as np
@@ -57,24 +55,18 @@ class DynFilter:
         ts.registerCallback(self.cb)
 
         # 几何确认: 里程计缓冲 + 静态地图残差 + 延迟入图队列
-        # 重活(树重建等)放独立工作线程: 若在 rospy 回调线程里周期性停顿, 同步队列积压
-        # 会造成给 SLAM 的扫描流时密时疏, 早期里程计轮间随机崩坏(2026-11-18 实测定位)
         self.track_check = rospy.get_param('~track_check', True)
-        self.odom_buf = deque(maxlen=30)     # [(t, q, xyz)] 工作线程写/回调线程读, 用锁
-        self.odom_lock = threading.Lock()
+        self.odom_buf = deque(maxlen=30)     # [(t, q, xyz)]
         self.pending = deque()               # [(t, pts(N,3) float32)] 待精确位姿入图
         rospy.Subscriber('/aft_mapped_to_init', Odometry, self.odom_cb)
         self.residual = StaticMapResidual(max_scans=rospy.get_param('~map_scans', 15),
                                           voxel=rospy.get_param('~map_voxel', 1.0),
                                           nn_thresh=rospy.get_param('~nn_thresh', 0.4),
-                                          rebuild_every=3.0,
+                                          rebuild_every=2.0,
                                           map_subsample=3)
-        self.residual_q = queue.Queue()
-        self.worker = threading.Thread(target=self._residual_worker, daemon=True)
-        self.worker.start()
         self.cluster_eps = rospy.get_param('~cluster_eps', 0.8)
         self.min_cluster_pts = rospy.get_param('~min_cluster_pts', 10)
-        rospy.loginfo('[dyn_filter] 几何确认: %s (nn_thresh=%.1fm map=%d帧 预测查询+延迟精确入图, 维护线程化)',
+        rospy.loginfo('[dyn_filter] 几何确认: %s (nn_thresh=%.1fm map=%d帧 预测查询+延迟精确入图)',
                       '开' if self.track_check else '关',
                       self.residual.nn_thresh, self.residual.max_scans)
 
@@ -85,63 +77,43 @@ class DynFilter:
         rospy.loginfo('[dyn_filter] 就绪: model=%s conf=%.2f dilate=%dpx', model_name, self.conf, self.dilate_px)
 
     def odom_cb(self, msg):
-        # 只入队, 重活在工作线程做, 绝不在回调线程阻塞
-        self.residual_q.put(('odom', msg))
-
-    def _residual_worker(self):
-        while not rospy.is_shutdown():
-            item = self.residual_q.get()
-            kind = item[0]
-            if kind == 'odom':
-                msg = item[1]
-                o = msg.pose.pose.orientation
-                p = msg.pose.pose.position
-                with self.odom_lock:
-                    self.odom_buf.append((msg.header.stamp.to_sec(),
-                                          (o.x, o.y, o.z, o.w), (p.x, p.y, p.z)))
-                self.flush_pending()
-            elif kind == 'scan':
-                _, t, pts = item
-                self.pending.append((t, pts))
-                self.flush_pending()
+        o = msg.pose.pose.orientation
+        p = msg.pose.pose.position
+        self.odom_buf.append((msg.header.stamp.to_sec(),
+                              (o.x, o.y, o.z, o.w), (p.x, p.y, p.z)))
+        self.flush_pending()
 
     def odom_at(self, ts):
         """插值到 ts 的位姿 (q, xyz); 无数据返回 None"""
-        with self.odom_lock:
-            buf = list(self.odom_buf)
-        if not buf:
+        if not self.odom_buf:
             return None
-        if ts <= buf[0][0]:
-            return buf[0][1], buf[0][2]
-        if ts >= buf[-1][0]:
-            return buf[-1][1], buf[-1][2]
-        for i in range(len(buf) - 1):
-            t0, q0, p0 = buf[i]
-            t1, q1, p1 = buf[i + 1]
+        if ts <= self.odom_buf[0][0]:
+            return self.odom_buf[0][1], self.odom_buf[0][2]
+        if ts >= self.odom_buf[-1][0]:
+            return self.odom_buf[-1][1], self.odom_buf[-1][2]
+        for i in range(len(self.odom_buf) - 1):
+            t0, q0, p0 = self.odom_buf[i]
+            t1, q1, p1 = self.odom_buf[i + 1]
             if t0 <= ts < t1:
                 a = (ts - t0) / max(t1 - t0, 1e-9)
                 return nlerp(q0, q1, a), (1 - a) * np.array(p0) + a * np.array(p1)
-        return buf[-1][1], buf[-1][2]
+        return self.odom_buf[-1][1], self.odom_buf[-1][2]
 
     def odom_at_pred(self, ts):
         """查询用位姿: 有足够 odom 时外推预测(消除查询侧滞后); 不足时插值/截断"""
-        with self.odom_lock:
-            buf = list(self.odom_buf)
-        if not buf:
+        if not self.odom_buf:
             return None
-        if len(buf) >= 2 and ts > buf[-1][0]:
-            t0, q0, p0 = buf[-2]
-            t1, q1, p1 = buf[-1]
+        if len(self.odom_buf) >= 2 and ts > self.odom_buf[-1][0]:
+            t0, q0, p0 = self.odom_buf[-2]
+            t1, q1, p1 = self.odom_buf[-1]
             return predict_pose(q0, p0, t0, q1, p1, t1, ts)
         return self.odom_at(ts)
 
     def flush_pending(self):
-        """暂存帧等其精确 odom 到达后入图(地图无滞后抖动); 仅工作线程调用"""
-        with self.odom_lock:
-            buf = list(self.odom_buf)
-        if not buf:
+        """暂存帧等其精确 odom 到达后入图(地图无滞后抖动)"""
+        if not self.odom_buf:
             return
-        newest = buf[-1][0]
+        newest = self.odom_buf[-1][0]
         while self.pending and self.pending[0][0] <= newest:
             t, pts = self.pending.popleft()
             q, p = self.odom_at(t)
@@ -231,8 +203,9 @@ class DynFilter:
                 # 静态地图残差: parked 贴图保留, moving 悬空剔除 (只删前景簇, 背景点保留)
                 if self.residual.is_moving(world[idx[clu]]):
                     drop[idx[clu]] = True
-            # 本帧暂存, 等精确 odom 到达后入图 (工作线程处理, 不阻塞回调)
-            self.residual_q.put(('scan', frame_t, np.ascontiguousarray(pts[:, :3], np.float32)))
+            # 本帧暂存, 等精确 odom 到达后入图
+            self.pending.append((frame_t, np.ascontiguousarray(pts[:, :3], np.float32)))
+            self.flush_pending()
         else:
             # 无里程计或关闭跟踪: 外观法回退(整掩码删除)
             drop[in_img] = mask[v[in_img], u[in_img]]
