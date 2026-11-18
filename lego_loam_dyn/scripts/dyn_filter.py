@@ -1,21 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YOLOv8-seg 视觉辅助动态点滤除节点 (几何确认在线版)
+YOLOv8-seg 视觉辅助动态点滤除节点
   相机图 -> YOLOv8-seg 实例掩膜(动态类别) -> 掩膜膨胀 -> 雷达点投影到像素平面
-  -> 深度连续前景簇 -> 静态地图残差判定(parked 贴图保留 / moving 悬空剔除)
-  -> 发布静态点云 /points_dyn_filtered
-KITTI 投影链: X_cam = P2 @ Tr @ [x,y,z,1]
-在线里程计滞后解法:
-  - 查询用【预测位姿】(最近两条 odom 匀速外推, 车辆加速度误差≈厘米级)
-  - 入图用【精确位姿】(帧暂存, 等该帧 odom 到达后变换入图) -> 地图无滞后抖动
-  - 输出不延迟, 管线吞吐不受影响
-评估 GT: SemanticKITTI moving 标注(251-257)
+  -> 落在动态掩膜内的点剔除 -> 发布静态点云 /points_dyn_filtered
+KITTI 投影链: X_cam = P2 @ R0_rect @ Tr_velo_to_cam @ [x,y,z,1]
+评估 GT 建议: SemanticKITTI moving 标注
 """
-import os
-import sys
-from collections import deque
-
 import numpy as np
 import cv2
 import rospy
@@ -23,13 +14,8 @@ import message_filters
 import sensor_msgs.point_cloud2 as pc2
 from message_filters import TimeSynchronizer
 from sensor_msgs.msg import Image, PointCloud2
-from nav_msgs.msg import Odometry
 from cv_bridge import CvBridge
 from ultralytics import YOLO
-
-sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from dyn_track import (quat_rotate, nlerp, predict_pose, foreground_cluster,
-                       StaticMapResidual)
 
 # COCO 动态类别白名单: person, bicycle, car, motorcycle, bus, train, truck
 DYNAMIC_CLASSES = [0, 1, 2, 3, 5, 6, 7]
@@ -54,71 +40,11 @@ class DynFilter:
         ts = TimeSynchronizer([img_sub, pc_sub], 10)
         ts.registerCallback(self.cb)
 
-        # 几何确认: 里程计缓冲 + 静态地图残差 + 延迟入图队列
-        self.track_check = rospy.get_param('~track_check', True)
-        self.odom_buf = deque(maxlen=30)     # [(t, q, xyz)]
-        self.pending = deque()               # [(t, pts(N,3) float32)] 待精确位姿入图
-        rospy.Subscriber('/aft_mapped_to_init', Odometry, self.odom_cb)
-        self.residual = StaticMapResidual(max_scans=rospy.get_param('~map_scans', 15),
-                                          voxel=rospy.get_param('~map_voxel', 1.0),
-                                          nn_thresh=rospy.get_param('~nn_thresh', 0.4),
-                                          rebuild_every=2.0,
-                                          map_subsample=3)
-        self.cluster_eps = rospy.get_param('~cluster_eps', 0.8)
-        self.min_cluster_pts = rospy.get_param('~min_cluster_pts', 10)
-        rospy.loginfo('[dyn_filter] 几何确认: %s (nn_thresh=%.1fm map=%d帧 预测查询+延迟精确入图)',
-                      '开' if self.track_check else '关',
-                      self.residual.nn_thresh, self.residual.max_scans)
-
         self.pub = rospy.Publisher('/points_dyn_filtered', PointCloud2, queue_size=2)
         self.pub_mask_img = rospy.Publisher('/dyn_filter/mask_debug', Image, queue_size=2) if self.pub_debug else None
         self.pub_proj_img = rospy.Publisher('/dyn_filter/projection_debug', Image, queue_size=2) if self.pub_debug else None
         self.proj_step = rospy.get_param('~proj_step', 5)  # 投影图每 N 个点画 1 个
         rospy.loginfo('[dyn_filter] 就绪: model=%s conf=%.2f dilate=%dpx', model_name, self.conf, self.dilate_px)
-
-    def odom_cb(self, msg):
-        o = msg.pose.pose.orientation
-        p = msg.pose.pose.position
-        self.odom_buf.append((msg.header.stamp.to_sec(),
-                              (o.x, o.y, o.z, o.w), (p.x, p.y, p.z)))
-        self.flush_pending()
-
-    def odom_at(self, ts):
-        """插值到 ts 的位姿 (q, xyz); 无数据返回 None"""
-        if not self.odom_buf:
-            return None
-        if ts <= self.odom_buf[0][0]:
-            return self.odom_buf[0][1], self.odom_buf[0][2]
-        if ts >= self.odom_buf[-1][0]:
-            return self.odom_buf[-1][1], self.odom_buf[-1][2]
-        for i in range(len(self.odom_buf) - 1):
-            t0, q0, p0 = self.odom_buf[i]
-            t1, q1, p1 = self.odom_buf[i + 1]
-            if t0 <= ts < t1:
-                a = (ts - t0) / max(t1 - t0, 1e-9)
-                return nlerp(q0, q1, a), (1 - a) * np.array(p0) + a * np.array(p1)
-        return self.odom_buf[-1][1], self.odom_buf[-1][2]
-
-    def odom_at_pred(self, ts):
-        """查询用位姿: 有足够 odom 时外推预测(消除查询侧滞后); 不足时插值/截断"""
-        if not self.odom_buf:
-            return None
-        if len(self.odom_buf) >= 2 and ts > self.odom_buf[-1][0]:
-            t0, q0, p0 = self.odom_buf[-2]
-            t1, q1, p1 = self.odom_buf[-1]
-            return predict_pose(q0, p0, t0, q1, p1, t1, ts)
-        return self.odom_at(ts)
-
-    def flush_pending(self):
-        """暂存帧等其精确 odom 到达后入图(地图无滞后抖动)"""
-        if not self.odom_buf:
-            return
-        newest = self.odom_buf[-1][0]
-        while self.pending and self.pending[0][0] <= newest:
-            t, pts = self.pending.popleft()
-            q, p = self.odom_at(t)
-            self.residual.add_scan(quat_rotate(q, pts) + p)
-            self.residual.maybe_rebuild(t)
 
     @staticmethod
     def load_calib(path):
@@ -154,7 +80,7 @@ class DynFilter:
         # 1. YOLOv8-seg 推理, 取动态类别实例掩膜 (推理尺寸 -> 重采样回原图尺寸)
         res = self.model(img, conf=self.conf, classes=DYNAMIC_CLASSES, verbose=False)[0]
         mask = np.zeros((H, W), bool)
-        if res.masks is not None and len(res.masks.data) > 0:
+        if res.masks is not None:
             masks = res.masks.data.cpu().numpy().astype(bool)  # (n, hm, wm) 推理分辨率
             masks = np.stack([cv2.resize(m.astype(np.uint8), (W, H),
                                          interpolation=cv2.INTER_NEAREST).astype(bool)
@@ -173,7 +99,7 @@ class DynFilter:
         else:
             pts = np.array(list(pc2.read_points(pc_msg, skip_nans=True)), np.float32)
 
-        # 3. 投影 + 实例级剔除判定 (前景簇 + 静态地图残差, 预测位姿查询)
+        # 3. 投影滤除 (向量化)
         N = len(pts)
         xyz1 = np.hstack([pts[:, :3], np.ones((N, 1))]).T
         X = self.P @ xyz1
@@ -182,33 +108,8 @@ class DynFilter:
         u = np.round(X[0] / np.maximum(Z, 1e-6)).astype(np.int64)
         v = np.round(X[1] / np.maximum(Z, 1e-6)).astype(np.int64)
         in_img = valid & (u >= 0) & (u < W) & (v >= 0) & (v < H)
-        Zc = np.where(Z > 0, Z, np.inf)  # 相机系深度(选前景簇用)
-
         drop = np.zeros(N, bool)
-        frame_t = img_msg.header.stamp.to_sec()
-        odom = self.odom_at_pred(frame_t) if self.track_check else None
-        if res.masks is not None and odom is not None:
-            q, t = odom
-            world = quat_rotate(q, pts[:, :3]) + t
-            valid_idx = np.where(in_img)[0]
-            rr, cc = v[valid_idx], u[valid_idx]
-            for m in masks:
-                idx = valid_idx[m[rr, cc]]
-                if len(idx) == 0:
-                    continue
-                # 深度连续前景簇: 掩码内点可能同时来自车身与车后背景, 取最小深度簇=物体本体
-                clu = foreground_cluster(pts[idx, :3], Zc[idx], eps=self.cluster_eps)
-                if len(clu) < self.min_cluster_pts:
-                    continue  # 簇太小无法可靠判定: 保留(静止先验, 宁漏删不误删 parked)
-                # 静态地图残差: parked 贴图保留, moving 悬空剔除 (只删前景簇, 背景点保留)
-                if self.residual.is_moving(world[idx[clu]]):
-                    drop[idx[clu]] = True
-            # 本帧暂存, 等精确 odom 到达后入图
-            self.pending.append((frame_t, np.ascontiguousarray(pts[:, :3], np.float32)))
-            self.flush_pending()
-        else:
-            # 无里程计或关闭跟踪: 外观法回退(整掩码删除)
-            drop[in_img] = mask[v[in_img], u[in_img]]
+        drop[in_img] = mask[v[in_img], u[in_img]]
         keep = ~drop
 
         # 4. 发布静态点云 (保留原字段结构)
