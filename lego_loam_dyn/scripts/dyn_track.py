@@ -73,9 +73,13 @@ def predict_pose(q0, p0, t0, q1, p1, t1, t):
     return q, p
 
 
-def foreground_cluster(pts_lidar, z_cam, eps=0.8, min_pts=3):
-    """3D 欧式聚类, 返回【平均相机深度最小且深度方差小】的簇索引
-    (前景物体离自车最近; 方差约束排除前景地面条带——地面深度跨度大而物体紧凑)
+def foreground_cluster(pts_lidar, z_cam, eps=0.8, min_pts=3, min_height=0.5):
+    """3D 欧式聚类, 返回【平均相机深度最小且满足形状约束】的簇索引
+    排除项:
+      - 深度方差 > 8m: 地面条带等背景
+      - 垂直高度 < min_height(0.5m): 掩码底部的前方路面斑块(地面比车身更近, 最小深度
+        准则会把路面误选为前景——2026-11-18 实测被删簇高程 -1.3~0.3m 全是地面,
+        逐帧删路面导致里程计从起点崩坏); 车身/行人垂直高度 ≥0.5m 不受影响
     pts_lidar: (N,3) 雷达系; z_cam: (N,) 相机系深度(仅用于选簇)"""
     n = len(pts_lidar)
     if n == 0:
@@ -101,6 +105,9 @@ def foreground_cluster(pts_lidar, z_cam, eps=0.8, min_pts=3):
             z_std = float(z_cam[clu].std())
             if z_std > 8.0:
                 continue  # 深度跨度大 -> 地面条带等背景, 跳过
+            height = float(pts_lidar[clu, 2].max() - pts_lidar[clu, 2].min())
+            if height < min_height:
+                continue  # 扁平 -> 路面斑块, 跳过(不删地面)
             score = z_mean + 0.3 * z_std
             if score < best_score:
                 best_score = score
