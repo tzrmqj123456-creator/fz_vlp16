@@ -945,7 +945,13 @@ public:
         float scDx = currentRobotPosPoint.x - cloudKeyPoses3D->points[SCclosestHistoryFrameID].x;
         float scDy = currentRobotPosPoint.y - cloudKeyPoses3D->points[SCclosestHistoryFrameID].y;
         float scDz = currentRobotPosPoint.z - cloudKeyPoses3D->points[SCclosestHistoryFrameID].z;
-        if (sqrt(scDx * scDx + scDy * scDy + scDz * scDz) > 50.0){
+        float scDist = sqrt(scDx * scDx + scDy * scDy + scDz * scDz);
+        std::cout << "[SC] est-distance gate: " << scDist << " m (curr " << currentRobotPosPoint.x
+                  << "," << currentRobotPosPoint.y << "," << currentRobotPosPoint.z
+                  << " vs hist " << cloudKeyPoses3D->points[SCclosestHistoryFrameID].x
+                  << "," << cloudKeyPoses3D->points[SCclosestHistoryFrameID].y
+                  << "," << cloudKeyPoses3D->points[SCclosestHistoryFrameID].z << ")" << std::endl;
+        if (scDist > 50.0){
             std::cout << "[SC] Reject this loop (estimated distance between current pose and matched key frame > 50.0 m)" << std::endl;
             return false;
         }
