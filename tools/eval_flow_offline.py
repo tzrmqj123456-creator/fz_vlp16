@@ -19,12 +19,14 @@ LBL_DIR = f'{ROOT}/semkitti_labels/dataset/sequences/05/labels'
 CALIB = f'{ROOT}/data_odometry_calib/dataset/sequences/05/calib.txt'
 MODEL = f'{ROOT}/lego_loam_dyn/models/yolov8s-seg.pt'
 MOVING_IDS = set(range(251, 258))
-STEP = 5
+STEP = 1   # 逐帧(0.1s间隔): GN 初值按单帧位移设定, 多帧间隔会差整数倍导致拟合失败
 CONF, DILATE = 0.35, 3
 
 sys.path.insert(0, f'{ROOT}/lego_loam_dyn/scripts')
-from dyn_flow import compute_flow, fit_egomotion, expected_flow, FLOW_W, FLOW_H
+from dyn_flow import compute_flow, egomotion_fit, instance_residual, foreground_cluster, FLOW_W, FLOW_H, RaftFlow
 from ultralytics import YOLO
+
+BACKEND = sys.argv[2] if len(sys.argv) > 2 else 'raft'   # raft | farneback
 
 
 def load_calib():
@@ -46,26 +48,36 @@ def main():
     Ks[1, 1] *= FLOW_H / 375.0
     Ks[1, 2] *= FLOW_H / 375.0
     model = YOLO(MODEL)
+    raft = RaftFlow() if BACKEND == 'raft' else None
 
     res_park, res_mov = [], []
     ego_speeds = []
     files = sorted(f for f in os.listdir(IMG_DIR) if f.endswith('.jpg'))
     t_flow = []
     for i in range(1, len(files), STEP):
-        img0 = cv2.imread(f'{IMG_DIR}/{files[i-1]}', cv2.IMREAD_GRAYSCALE)
-        img1 = cv2.imread(f'{IMG_DIR}/{files[i]}', cv2.IMREAD_GRAYSCALE)
-        if img0 is None or img1 is None:
-            continue
+        if BACKEND == 'raft':
+            img1c = cv2.imread(f'{IMG_DIR}/{files[i]}')
+            if img1c is None:
+                continue
+            t0 = time.time()
+            flow = raft(img1c)
+            t_flow.append((time.time() - t0) * 1000)
+            if flow is None:
+                continue
+        else:
+            img0 = cv2.imread(f'{IMG_DIR}/{files[i-1]}', cv2.IMREAD_GRAYSCALE)
+            img1 = cv2.imread(f'{IMG_DIR}/{files[i]}', cv2.IMREAD_GRAYSCALE)
+            if img0 is None or img1 is None:
+                continue
+            t0 = time.time()
+            flow = compute_flow(img0, img1)      # (FLOW_H, FLOW_W, 2) 降采样空间
+            t_flow.append((time.time() - t0) * 1000)
         name = files[i][:-4]
         pts = np.fromfile(f'{VEL_DIR}/{name}.bin', np.float32).reshape(-1, 4)
         lbl = np.fromfile(f'{LBL_DIR}/{name}.label', np.uint32)
         if len(pts) != len(lbl):
             continue
         sem = lbl & 0xFFFF
-
-        t0 = time.time()
-        flow = compute_flow(img0, img1)      # (FLOW_H, FLOW_W, 2) 降采样空间
-        t_flow.append((time.time() - t0) * 1000)
 
         # 深度点投影(原始分辨率) -> 降采样空间坐标 + 光流采样(最近邻)
         xyz1 = np.hstack([pts[:, :3], np.ones((len(pts), 1))]).T
@@ -85,10 +97,11 @@ def main():
         fu = flow[vs, us, 0]
         fv_ = flow[vs, us, 1]
 
-        # 自车运动拟合(用全帧深度点; 残差法不需要 odom)
-        sol, ratio = fit_egomotion(us.astype(float), vs.astype(float), Z_in, fu, fv_, Ks)
-        if sol is None:
+        # 自车运动拟合(离散迭代精化; 不依赖 odom)
+        ret = egomotion_fit(us.astype(float), vs.astype(float), Z_in, flow, Ks)
+        if ret is None:
             continue
+        sol, R, t, ratio = ret
         ego_speeds.append(float(np.linalg.norm(sol[:3])))
 
         # 实例残差
@@ -101,27 +114,35 @@ def main():
                                      interpolation=cv2.INTER_NEAREST).astype(bool) for m in masks])
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * DILATE + 1, 2 * DILATE + 1))
         masks = np.stack([cv2.dilate(m.astype(np.uint8), k).astype(bool) for m in masks])
+        Zc = np.where(Z > 0, Z, np.inf)
         for m in masks:
             mem = np.zeros(len(pts), bool)
             mem[in_img] = m[v[in_img], u[in_img]]
-            idx = pos_in[mem]
+            full_idx = np.where(mem)[0]
+            if len(full_idx) < 10:
+                continue
+            # 前景簇: 只取物体本体点(排除掩码边缘背景, 否则期望流错误抬高噪声底)
+            clu = foreground_cluster(pts[full_idx, :3], Zc[full_idx])
+            if len(clu) < 10:
+                continue
+            fidx = full_idx[clu]
+            idx = pos_in[fidx]
             idx = idx[idx >= 0]
             if len(idx) < 10:
                 continue
-            eu, ev = expected_flow(us[idx].astype(float), vs[idx].astype(float), Z_in[idx], sol, Ks)
-            resid = np.hypot(fu[idx] - eu, fv_[idx] - ev)
-            full_idx = np.where(mem)[0]
-            frac = (np.array([s in MOVING_IDS for s in sem[full_idx]]).sum()) / len(full_idx)
-            (res_mov if frac > 0.5 else res_park).append(float(np.median(resid)))
+            resid = instance_residual(us[idx].astype(float), vs[idx].astype(float),
+                                      Z_in[idx], flow, R, t, Ks)
+            frac = (np.array([s in MOVING_IDS for s in sem[fidx]]).sum()) / len(fidx)
+            (res_mov if frac > 0.5 else res_park).append(resid)
 
     res_park, res_mov = np.array(res_park), np.array(res_mov)
-    print(f'===== 光流残差分布 (评估 {len(files)//STEP} 帧对, Farneback {FLOW_W}x{FLOW_H}) =====')
-    print(f'ego 速度拟合: 中位 {np.median(ego_speeds):.1f} m/s (GT 起始段约 7-8 m/s, 合理性检查)')
-    print(f'parked 实例残差: n={len(res_park)}, 中位 {np.median(res_park):.2f}px, 90分位 {np.percentile(res_park,90):.2f}px')
-    print(f'moving 实例残差: n={len(res_mov)}, 中位 {np.median(res_mov):.2f}px, 10分位 {np.percentile(res_mov,10):.2f}px')
+    print(f'===== 光流残差分布 (评估 {len(files)//STEP} 帧对, RAFT {FLOW_W}x{FLOW_H}) =====')
+    print(f'ego 速度拟合: 中位 {np.median(ego_speeds)*10:.1f} m/s (GT 起始段约 7-8 m/s, 合理性检查)')
+    print(f'parked 实例残差: n={len(res_park)}, 中位 {np.median(res_park):.3f} m/帧, 90分位 {np.percentile(res_park,90):.3f} m/帧')
+    print(f'moving 实例残差: n={len(res_mov)}, 中位 {np.median(res_mov):.3f} m/帧, 10分位 {np.percentile(res_mov,10):.3f} m/帧')
     print(f'光流计算耗时: mean {np.mean(t_flow):.0f} ms/帧')
-    print('阈值扫描 (残差 > th 判 moving):')
-    for th in [1.0, 1.5, 2.0, 2.5, 3.0]:
+    print('阈值扫描 (残差 > th 判 moving, 单位 m/帧):')
+    for th in [0.05, 0.1, 0.15, 0.2, 0.3]:
         tp = (res_mov > th).sum(); fp = (res_park > th).sum()
         fn = (res_mov <= th).sum()
         prec = tp / max(tp + fp, 1); rec = tp / max(tp + fn, 1)
