@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YOLOv8-seg 视觉辅助动态点滤除节点
+YOLOv8-seg 视觉辅助动态点滤除节点 (外观候选 + 光流确认)
   相机图 -> YOLOv8-seg 实例掩膜(动态类别) -> 掩膜膨胀 -> 雷达点投影到像素平面
-  -> 落在动态掩膜内的点剔除 -> 发布静态点云 /points_dyn_filtered
-KITTI 投影链: X_cam = P2 @ R0_rect @ Tr_velo_to_cam @ [x,y,z,1]
-评估 GT 建议: SemanticKITTI moving 标注
+  -> RAFT-small 光流 + 自车运动自拟合 -> 实例前景簇的光流残差(度量归一化 m/帧)
+  -> 残差 > 阈值(0.4 m/帧, parked 噪声底之上)才剔除, parked 车保留
+KITTI 投影链: X_cam = P2 @ Tr @ [x,y,z,1]
+评估 GT: SemanticKITTI moving 标注(251-257)
 """
+import os
+import sys
+
 import numpy as np
 import cv2
 import rospy
@@ -16,6 +20,10 @@ from message_filters import TimeSynchronizer
 from sensor_msgs.msg import Image, PointCloud2
 from cv_bridge import CvBridge
 from ultralytics import YOLO
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from dyn_flow import (RaftFlow, egomotion_fit, instance_residual, foreground_cluster,
+                      FLOW_W, FLOW_H)
 
 # COCO 动态类别白名单: person, bicycle, car, motorcycle, bus, train, truck
 DYNAMIC_CLASSES = [0, 1, 2, 3, 5, 6, 7]
@@ -34,6 +42,17 @@ class DynFilter:
         self.model = YOLO(model_name)
         self.bridge = CvBridge()
 
+        # 光流确认: RAFT-small(640x192, ~35ms) + 自车运动自拟合 + 实例残差
+        self.flow_check = rospy.get_param('~flow_check', True)
+        self.flow_thresh = rospy.get_param('~flow_thresh', 0.4)      # m/帧, parked 噪声底之上
+        self.fit_subsample = rospy.get_param('~fit_subsample', 8)    # ego 拟合点降采样
+        self.raft = RaftFlow() if self.flow_check else None
+        self.Ks = None
+        if self.flow_check:
+            self.Ks = self.load_K()
+        rospy.loginfo('[dyn_filter] 光流确认: %s (thresh=%.2f m/帧, RAFT %dx%d)',
+                      '开' if self.flow_check else '关', self.flow_thresh, FLOW_W, FLOW_H)
+
         img_sub = message_filters.Subscriber('/kitti/camera_color_left/image_raw', Image)
         pc_sub = message_filters.Subscriber('/velodyne_points', PointCloud2)
         # 图像与点云由 kitti_dyn_player 同进程同时间戳发布 -> 精确同步
@@ -45,6 +64,21 @@ class DynFilter:
         self.pub_proj_img = rospy.Publisher('/dyn_filter/projection_debug', Image, queue_size=2) if self.pub_debug else None
         self.proj_step = rospy.get_param('~proj_step', 5)  # 投影图每 N 个点画 1 个
         rospy.loginfo('[dyn_filter] 就绪: model=%s conf=%.2f dilate=%dpx', model_name, self.conf, self.dilate_px)
+
+    def load_K(self):
+        """内参(缩放至光流分辨率)"""
+        data = {}
+        with open(rospy.get_param('~calib_path')) as f:
+            for line in f:
+                if ':' in line:
+                    k, v = line.split(':', 1)
+                    data[k.strip()] = np.array([float(x) for x in v.split()])
+        K = data['P2'].reshape(3, 4)[:3, :3].copy()
+        K[0, 0] *= FLOW_W / 1242.0
+        K[0, 2] *= FLOW_W / 1242.0
+        K[1, 1] *= FLOW_H / 375.0
+        K[1, 2] *= FLOW_H / 375.0
+        return K
 
     @staticmethod
     def load_calib(path):
@@ -99,7 +133,7 @@ class DynFilter:
         else:
             pts = np.array(list(pc2.read_points(pc_msg, skip_nans=True)), np.float32)
 
-        # 3. 投影滤除 (向量化)
+        # 3. 投影 + 实例级判定 (外观候选 + 光流确认)
         N = len(pts)
         xyz1 = np.hstack([pts[:, :3], np.ones((N, 1))]).T
         X = self.P @ xyz1
@@ -109,7 +143,38 @@ class DynFilter:
         v = np.round(X[1] / np.maximum(Z, 1e-6)).astype(np.int64)
         in_img = valid & (u >= 0) & (u < W) & (v >= 0) & (v < H)
         drop = np.zeros(N, bool)
-        drop[in_img] = mask[v[in_img], u[in_img]]
+
+        flow = self.raft(img) if self.flow_check else None
+        flow_ret = None
+        if flow is not None:
+            # 自车运动自拟合(降采样点, 不依赖里程计)
+            idx_fit = np.where(in_img)[0][::self.fit_subsample]
+            us_f = (u[idx_fit] * (FLOW_W / 1242.0)).astype(float)
+            vs_f = (v[idx_fit] * (FLOW_H / 375.0)).astype(float)
+            flow_ret = egomotion_fit(us_f, vs_f, Z[idx_fit], flow, self.Ks)
+
+        if res.masks is not None and flow_ret is not None:
+            R, t = flow_ret[1], flow_ret[2]
+            valid_idx = np.where(in_img)[0]
+            rr, cc = v[valid_idx], u[valid_idx]
+            Zc = np.where(Z > 0, Z, np.inf)
+            for m in masks:
+                idx = valid_idx[m[rr, cc]]
+                if len(idx) == 0:
+                    continue
+                # 前景簇: 只取物体本体点算残差(掩码边缘背景点会抬高噪声底)
+                clu = foreground_cluster(pts[idx, :3], Zc[idx])
+                if len(clu) < 10:
+                    continue
+                fidx = idx[clu]
+                resid = instance_residual((u[fidx] * (FLOW_W / 1242.0)).astype(float),
+                                          (v[fidx] * (FLOW_H / 375.0)).astype(float),
+                                          Z[fidx], flow, R, t, self.Ks)
+                if resid > self.flow_thresh:
+                    drop[idx] = True    # 光流确认 moving: 删整掩码(parked 车保留)
+        else:
+            # 光流不可用(首帧/拟合失败): 外观法回退(整掩码删除)
+            drop[in_img] = mask[v[in_img], u[in_img]]
         keep = ~drop
 
         # 4. 发布静态点云 (保留原字段结构)

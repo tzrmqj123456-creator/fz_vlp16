@@ -13,7 +13,7 @@ import numpy as np
 import cv2
 import torch
 
-FLOW_W, FLOW_H = 1240, 376   # 近全分辨率(可被8整除): 光流噪声随分辨率下降
+FLOW_W, FLOW_H = 640, 192   # 在线用(35ms/帧); 离线验证可改 1240x376 降噪声
 
 
 def compute_flow(g0, g1):
