@@ -88,7 +88,7 @@ public:
 
     // loop thres
     const double SEARCH_RATIO = 0.1; // for fast comparison, no Brute-force, but search 10 % is okay. // not was in the original conf paper, but improved ver.
-    const double SC_DIST_THRES = 0.13; // 上游默认(0.1-0.2 假警报罕见): 末端回环链 0.07~0.17 全放行, 假阳性 0.30+ 全滤; 与历史最佳轮(4.25)一致
+    const double SC_DIST_THRES = 0.10; // 2026-11-18 收紧: 实测真因子 0.054~0.084, 末段假因子 0.119(83m 假)贴着 0.13 混入; 0.10 挡假保真
 
     // config 
     const int    TREE_MAKING_PERIOD_ = 10; // i.e., remaking tree frequency, to avoid non-mandatory every remaking, to save time cost / in the LeGO-LOAM integration, it is synchronized with the loop detection callback (which is 1Hz) so it means the tree is updated evrey 10 sec. But you can use the smaller value because it is enough fast ~ 5-50ms wrt N.
