@@ -939,6 +939,17 @@ public:
             return false;
         }
 
+        // 空间一致门限(2026-11-18): 候选关键帧与当前位姿的估计距离须 < 50m。GT 实测假阳性家族
+        // (末段帧误匹配起点/中段帧)估计距离 0.3~1km, 而真回环(中段穿越/末端擦肩)估计距离 <2m;
+        // SC 距离阈值挡不住假因子(0.08~0.12 与真因子重叠, 且随每轮数据库滑动)
+        float scDx = currentRobotPosPoint.x - cloudKeyPoses3D->points[SCclosestHistoryFrameID].x;
+        float scDy = currentRobotPosPoint.y - cloudKeyPoses3D->points[SCclosestHistoryFrameID].y;
+        float scDz = currentRobotPosPoint.z - cloudKeyPoses3D->points[SCclosestHistoryFrameID].z;
+        if (sqrt(scDx * scDx + scDy * scDy + scDz * scDz) > 50.0){
+            std::cout << "[SC] Reject this loop (estimated distance between current pose and matched key frame > 50.0 m)" << std::endl;
+            return false;
+        }
+
         // time gate 2: cooldown after the last SC loop factor (2026-11-18: 3s->10s 末端擦肩链限幅——
         // 末端链后段锚点 GT 实测漂移到 33~90m 假阳性, 10s 冷却只保留链首最强锚点, 中段穿越链仍可
         // 添加 2~3 个精确因子; 同时防 1Hz 回环线程重复添加相同因子)
